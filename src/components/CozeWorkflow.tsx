@@ -2,8 +2,10 @@ import { useState, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sparkles, Loader2, AlertCircle, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import { FadeIn } from './animations/FadeIn'
+import { callCloudFunction } from '../lib/cloudbase'
 
-// Backend handles Coze API calls — token stays on server
+// Production uses CloudBase cloud functions; local dev uses SSE proxy
+const isProduction = typeof window !== 'undefined' && !window.location.hostname.includes('localhost')
 
 interface CozeWorkflowProps {
   onGenerationStart: () => void
@@ -53,6 +55,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
+  const [proxyFailed, setProxyFailed] = useState(false)
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
@@ -62,6 +65,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     setPhase('running')
     setErrorMsg('')
     setVideoUrl('')
+    setProxyFailed(false)
     setEvents([])
     setShowLog(true)
 
@@ -71,139 +75,160 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
 
     try {
       abortRef.current = new AbortController()
-
-      const res = await fetch('/api/workflow', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shuiyin, zhuti }),
-        signal: abortRef.current.signal,
-      })
-
-      addEvent('raw', `响应状态: ${res.status} ${res.statusText}`)
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(errBody.error || `HTTP ${res.status}`)
-      }
-
       onGenerationStart()
 
-      const reader = res.body?.getReader()
-      if (!reader) throw new Error('无法读取响应流')
+      if (isProduction) {
+        // Production: use CloudBase SDK → cloud function → JSON response
+        addEvent('raw', '通过 CloudBase 云函数调用 Coze...')
+        const data = await callCloudFunction('workflow', { shuiyin, zhuti }) as Record<string, unknown>
+        addEvent('raw', '云函数返回: ' + JSON.stringify(data).slice(0, 300))
 
-      const decoder = new TextDecoder()
-      let fullContent = ''
-      let sseBuffer = ''
-      let foundUrl = ''
+        if (data.error) throw new Error(String(data.error))
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) { addEvent('raw', '-- 流结束 --'); break }
+        const foundUrl = (data.videoUrl as string) || ''
+        if (foundUrl) {
+          setVideoUrl(foundUrl)
+          setPhase('done')
+          addEvent('url', `最终视频链接: ${foundUrl}`)
+          onGenerationDone(foundUrl)
+          setShowLog(false)
+        } else {
+          setPhase('done')
+          addEvent('raw', `完整响应: ${JSON.stringify(data).slice(0, 1000)}`)
+        }
+      } else {
+        // Local dev: SSE streaming via /api/workflow proxy
+        const res = await fetch('/api/workflow', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ shuiyin, zhuti }),
+          signal: abortRef.current.signal,
+        })
 
-        const chunk = decoder.decode(value, { stream: true })
-        sseBuffer += chunk
+        addEvent('raw', `响应状态: ${res.status} ${res.statusText}`)
 
-        const parts = sseBuffer.split(/\n\n/)
-        sseBuffer = parts.pop() || ''
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({ error: res.statusText }))
+          throw new Error(errBody.error || `HTTP ${res.status}`)
+        }
 
-        for (const part of parts) {
-          if (!part.trim()) continue
-          addEvent('raw', part.trim().slice(0, 300))
+        const reader = res.body?.getReader()
+        if (!reader) throw new Error('无法读取响应流')
 
-          const dataLines: string[] = []
-          let eventType = ''
-          for (const line of part.split('\n')) {
-            const trimmed = line.trim()
-            if (trimmed.startsWith('data:')) dataLines.push(trimmed.slice(5).trim())
-            else if (trimmed.startsWith('event:')) eventType = trimmed.slice(6).trim()
-          }
+        const decoder = new TextDecoder()
+        let fullContent = ''
+        let sseBuffer = ''
+        let foundUrl = ''
 
-          if (dataLines.length === 0) continue
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) { addEvent('raw', '-- 流结束 --'); break }
 
-          if (eventType === 'Error' || eventType === 'error') {
+          const chunk = decoder.decode(value, { stream: true })
+          sseBuffer += chunk
+
+          const parts = sseBuffer.split(/\n\n/)
+          sseBuffer = parts.pop() || ''
+
+          for (const part of parts) {
+            if (!part.trim()) continue
+            addEvent('raw', part.trim().slice(0, 300))
+
+            const dataLines: string[] = []
+            let eventType = ''
+            for (const line of part.split('\n')) {
+              const trimmed = line.trim()
+              if (trimmed.startsWith('data:')) dataLines.push(trimmed.slice(5).trim())
+              else if (trimmed.startsWith('event:')) eventType = trimmed.slice(6).trim()
+            }
+
+            if (dataLines.length === 0) continue
+
+            if (eventType === 'Error' || eventType === 'error') {
+              for (const dataStr of dataLines) {
+                try {
+                  const err = JSON.parse(dataStr)
+                  const msg = err.error_message || err.message || dataStr
+                  throw new Error(`Coze 错误: ${msg}`)
+                } catch (e) {
+                  if (e instanceof Error && e.message.startsWith('Coze 错误:')) throw e
+                }
+              }
+              continue
+            }
+
             for (const dataStr of dataLines) {
+              if (dataStr === '[DONE]') { addEvent('parsed', '[DONE]'); continue }
+
               try {
-                const err = JSON.parse(dataStr)
-                const msg = err.error_message || err.message || dataStr
-                throw new Error(`Coze 错误: ${msg}`)
-              } catch (e) {
-                if (e instanceof Error && e.message.startsWith('Coze 错误:')) throw e
+                const parsed = JSON.parse(dataStr)
+                addEvent('parsed', JSON.stringify(parsed).slice(0, 300))
+
+                const content = parsed.content || parsed.output || parsed.text || parsed.answer || ''
+                if (typeof content === 'string') fullContent += content
+
+                const url = parsed.url || parsed.video_url || parsed.videoUrl || parsed.file_url || parsed.fileUrl || ''
+                if (url) { foundUrl = url; addEvent('url', `发现视频链接: ${url}`); break }
+
+                if (parsed.output) {
+                  if (typeof parsed.output === 'string') {
+                    const outUrl = extractVideoUrl(parsed.output)
+                    if (outUrl) { foundUrl = outUrl; addEvent('url', `从output文本发现: ${outUrl}`); break }
+                  } else if (typeof parsed.output === 'object') {
+                    const outUrl = parsed.output.url || parsed.output.video_url || parsed.output.file_url || ''
+                    if (outUrl) { foundUrl = outUrl; addEvent('url', `从output对象发现: ${outUrl}`); break }
+                  }
+                }
+
+                const attachments = parsed.attachments || parsed.files || []
+                if (Array.isArray(attachments)) {
+                  for (const att of attachments) {
+                    const attUrl = att.url || att.file_url || att.download_url || ''
+                    if (attUrl) { foundUrl = attUrl; addEvent('url', `从附件发现: ${attUrl}`); break }
+                  }
+                  if (foundUrl) break
+                }
+
+                if (parsed.data && typeof parsed.data === 'object') {
+                  const dataUrl = parsed.data.url || parsed.data.video_url || parsed.data.file_url || ''
+                  if (dataUrl) { foundUrl = dataUrl; addEvent('url', `从data对象发现: ${dataUrl}`); break }
+                }
+
+                if (parsed.message && typeof parsed.message === 'object') {
+                  if (parsed.message.content) fullContent += String(parsed.message.content)
+                }
+              } catch {
+                const urlFromStr = extractVideoUrl(dataStr)
+                if (urlFromStr) { foundUrl = urlFromStr; addEvent('url', `发现视频链接: ${urlFromStr}`); break }
               }
             }
-            continue
+
+            if (foundUrl) break
           }
 
-          for (const dataStr of dataLines) {
-            if (dataStr === '[DONE]') { addEvent('parsed', '[DONE]'); continue }
-
-            try {
-              const parsed = JSON.parse(dataStr)
-              addEvent('parsed', JSON.stringify(parsed).slice(0, 300))
-
-              const content = parsed.content || parsed.output || parsed.text || parsed.answer || ''
-              if (typeof content === 'string') fullContent += content
-
-              const url = parsed.url || parsed.video_url || parsed.videoUrl || parsed.file_url || parsed.fileUrl || ''
-              if (url) { foundUrl = url; addEvent('url', `发现视频链接: ${url}`); break }
-
-              if (parsed.output) {
-                if (typeof parsed.output === 'string') {
-                  const outUrl = extractVideoUrl(parsed.output)
-                  if (outUrl) { foundUrl = outUrl; addEvent('url', `从output文本发现: ${outUrl}`); break }
-                } else if (typeof parsed.output === 'object') {
-                  const outUrl = parsed.output.url || parsed.output.video_url || parsed.output.file_url || ''
-                  if (outUrl) { foundUrl = outUrl; addEvent('url', `从output对象发现: ${outUrl}`); break }
-                }
-              }
-
-              const attachments = parsed.attachments || parsed.files || []
-              if (Array.isArray(attachments)) {
-                for (const att of attachments) {
-                  const attUrl = att.url || att.file_url || att.download_url || ''
-                  if (attUrl) { foundUrl = attUrl; addEvent('url', `从附件发现: ${attUrl}`); break }
-                }
-                if (foundUrl) break
-              }
-
-              if (parsed.data && typeof parsed.data === 'object') {
-                const dataUrl = parsed.data.url || parsed.data.video_url || parsed.data.file_url || ''
-                if (dataUrl) { foundUrl = dataUrl; addEvent('url', `从data对象发现: ${dataUrl}`); break }
-              }
-
-              if (parsed.message && typeof parsed.message === 'object') {
-                if (parsed.message.content) fullContent += String(parsed.message.content)
-              }
-            } catch {
-              const urlFromStr = extractVideoUrl(dataStr)
-              if (urlFromStr) { foundUrl = urlFromStr; addEvent('url', `发现视频链接: ${urlFromStr}`); break }
-            }
+          if (!foundUrl) {
+            const urlFromContent = extractVideoUrl(fullContent)
+            if (urlFromContent) { foundUrl = urlFromContent; addEvent('url', `从内容中发现: ${urlFromContent}`) }
           }
 
           if (foundUrl) break
         }
 
-        if (!foundUrl) {
+        if (!foundUrl && fullContent) {
           const urlFromContent = extractVideoUrl(fullContent)
-          if (urlFromContent) { foundUrl = urlFromContent; addEvent('url', `从内容中发现: ${urlFromContent}`) }
+          if (urlFromContent) foundUrl = urlFromContent
         }
 
-        if (foundUrl) break
-      }
-
-      if (!foundUrl && fullContent) {
-        const urlFromContent = extractVideoUrl(fullContent)
-        if (urlFromContent) foundUrl = urlFromContent
-      }
-
-      if (foundUrl) {
-        setVideoUrl(foundUrl)
-        setPhase('done')
-        addEvent('url', `最终视频链接: ${foundUrl}`)
-        onGenerationDone(foundUrl)
-        setShowLog(false)
-      } else {
-        setPhase('done')
-        addEvent('raw', `完整响应: ${fullContent.slice(0, 1000)}`)
+        if (foundUrl) {
+          setVideoUrl(foundUrl)
+          setPhase('done')
+          addEvent('url', `最终视频链接: ${foundUrl}`)
+          onGenerationDone(foundUrl)
+          setShowLog(false)
+        } else {
+          setPhase('done')
+          addEvent('raw', `完整响应: ${fullContent.slice(0, 1000)}`)
+        }
       }
     } catch (err) {
       onGenerationStop()
@@ -279,21 +304,33 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                   animate={{ opacity: 1, y: 0 }}
                   className="space-y-3"
                 >
-                  {/* Video generated — open in new tab for reliable cross-origin playback */}
-                  <div className="rounded-2xl bg-gradient-to-br from-stone-900 to-stone-800 p-8 text-center space-y-4">
-                    <Play size={32} className="text-white mx-auto opacity-80" />
-                    <p className="text-white text-lg font-medium">视频已生成完毕</p>
-                    <p className="text-stone-400 text-sm">点击下方按钮在新标签页播放</p>
-                    <a
-                      href={videoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-semibold text-stone-900 hover:bg-stone-100 transition-all active:scale-[0.98]"
-                    >
-                      <Play size={18} />
-                      播放视频
-                    </a>
-                  </div>
+                  {isProduction || proxyFailed ? (
+                    <div className="rounded-2xl bg-gradient-to-br from-stone-900 to-stone-800 p-8 text-center space-y-4">
+                      <Play size={32} className="text-white mx-auto opacity-80" />
+                      <p className="text-white text-lg font-medium">视频已生成完毕</p>
+                      <p className="text-stone-400 text-sm">点击下方按钮在新标签页播放</p>
+                      <a
+                        href={videoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-semibold text-stone-900 hover:bg-stone-100 transition-all active:scale-[0.98]"
+                      >
+                        <Play size={18} />
+                        播放视频
+                      </a>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
+                      <video
+                        src={`/api/video-proxy?url=${encodeURIComponent(videoUrl)}`}
+                        controls
+                        playsInline
+                        preload="auto"
+                        className="w-full aspect-video object-contain"
+                        onError={() => setProxyFailed(true)}
+                      />
+                    </div>
+                  )}
                 </motion.div>
               )}
 

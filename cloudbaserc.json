@@ -1,0 +1,25 @@
+{
+  "version": "2.0",
+  "envId": "test-d2gxosyerbfae7e13",
+  "functionRoot": "./cloudfunctions",
+  "functions": [
+    {
+      "name": "workflow",
+      "timeout": 600,
+      "envVariables": {
+        "COZE_TOKEN": "pat_ervvPIQOKDLONWWa9LLUGqFHg57vY2dBnlyIbez5T3QwW8V9qkxuIJIUeplwfhPl",
+        "COZE_API": "https://api.coze.cn/v1/workflow/stream_run",
+        "COZE_WORKFLOW_ID": "7664202655792054308"
+      },
+      "triggers": []
+    },
+    {
+      "name": "video-proxy",
+      "timeout": 60,
+      "triggers": []
+    }
+  ],
+  "hosting": {
+    "root": "./dist"
+  }
+}
