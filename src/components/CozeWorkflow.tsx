@@ -53,7 +53,6 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
-  const [proxyFailed, setProxyFailed] = useState(false)
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
@@ -63,7 +62,6 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     setPhase('running')
     setErrorMsg('')
     setVideoUrl('')
-    setProxyFailed(false)
     setEvents([])
     setShowLog(true)
 
@@ -281,39 +279,21 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                   animate={{ opacity: 1, y: 0 }}
                   className="space-y-3"
                 >
-                  {proxyFailed ? (
-                    <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-6 text-center space-y-3">
-                      <p className="text-sm text-amber-700">视频已生成，可通过下方链接查看</p>
-                      <div className="flex items-center justify-center gap-3 flex-wrap">
-                        <a
-                          href={videoUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-amber-700 transition-all"
-                        >
-                          在新标签页打开
-                        </a>
-                        <button
-                          onClick={() => navigator.clipboard.writeText(videoUrl)}
-                          className="inline-flex items-center gap-2 rounded-xl bg-white border border-stone-200 px-5 py-2.5 text-sm font-medium text-stone-700 hover:bg-stone-50 transition-all"
-                        >
-                          复制链接
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Backend proxy — same origin, no CORS issues */
-                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
-                      <video
-                        src={`/api/video-proxy?url=${encodeURIComponent(videoUrl)}`}
-                        controls
-                        playsInline
-                        preload="auto"
-                        className="w-full aspect-video object-contain"
-                        onError={() => setProxyFailed(true)}
-                      />
-                    </div>
-                  )}
+                  {/* Video generated — open in new tab for reliable cross-origin playback */}
+                  <div className="rounded-2xl bg-gradient-to-br from-stone-900 to-stone-800 p-8 text-center space-y-4">
+                    <Play size={32} className="text-white mx-auto opacity-80" />
+                    <p className="text-white text-lg font-medium">视频已生成完毕</p>
+                    <p className="text-stone-400 text-sm">点击下方按钮在新标签页播放</p>
+                    <a
+                      href={videoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-semibold text-stone-900 hover:bg-stone-100 transition-all active:scale-[0.98]"
+                    >
+                      <Play size={18} />
+                      播放视频
+                    </a>
+                  </div>
                 </motion.div>
               )}
 
