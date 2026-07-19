@@ -55,7 +55,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
-  const [playMode, setPlayMode] = useState<'direct' | 'blob' | 'link'>('direct')
+  const [playMode, setPlayMode] = useState<'direct' | 'proxy' | 'blob' | 'link'>('direct')
   const [blobUrl, setBlobUrl] = useState('')
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
@@ -322,33 +322,31 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         playsInline
                         preload="auto"
                         className="w-full aspect-video object-contain"
+                      />
+                    </div>
+                  ) : playMode === 'proxy' ? (
+                    /* Same-origin proxy — avoids CDN cross-origin blocking */
+                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
+                      <video
+                        src={`/api/video-proxy?url=${encodeURIComponent(videoUrl)}`}
+                        controls
+                        playsInline
+                        preload="auto"
+                        className="w-full aspect-video object-contain"
                         onError={() => setPlayMode('link')}
                       />
                     </div>
                   ) : (
-                    /* Try signed URL directly */
+                    /* Try signed URL directly first */
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
                       <video
                         src={videoUrl}
                         controls
                         playsInline
                         preload="auto"
+                        referrerPolicy="no-referrer"
                         className="w-full aspect-video object-contain"
-                        onError={async () => {
-                          // Direct play failed — try downloading as blob
-                          try {
-                            const res = await fetch(videoUrl)
-                            if (res.ok) {
-                              const blob = await res.blob()
-                              if (blob.size > 0) {
-                                setBlobUrl(URL.createObjectURL(blob))
-                                setPlayMode('blob')
-                                return
-                              }
-                            }
-                          } catch { /* fall through */ }
-                          setPlayMode('link')
-                        }}
+                        onError={() => setPlayMode('proxy')}
                       />
                     </div>
                   )}
