@@ -463,7 +463,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         className="w-full aspect-video object-contain"
                       />
                     </div>
-                  ) : isProduction || proxyFailed ? (
+                  ) : proxyFailed ? (
                     <div className="rounded-2xl bg-gradient-to-br from-stone-900 to-stone-800 p-8 text-center space-y-4">
                       <Play size={32} className="text-white mx-auto opacity-80" />
                       <p className="text-white text-lg font-medium">视频已生成完毕</p>
@@ -477,6 +477,17 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         <Play size={18} />
                         播放视频
                       </a>
+                    </div>
+                  ) : isProduction ? (
+                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
+                      <video
+                        src={`/sw-video?url=${encodeURIComponent(videoUrl)}`}
+                        controls
+                        playsInline
+                        preload="auto"
+                        className="w-full aspect-video object-contain"
+                        onError={() => setProxyFailed(true)}
+                      />
                     </div>
                   ) : (
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
