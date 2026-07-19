@@ -55,7 +55,8 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
-  const [playMode, setPlayMode] = useState<'direct' | 'link'>('direct')
+  const [playMode, setPlayMode] = useState<'direct' | 'blob' | 'link'>('direct')
+  const [blobUrl, setBlobUrl] = useState('')
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
@@ -66,6 +67,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     setErrorMsg('')
     setVideoUrl('')
     setPlayMode('direct')
+    setBlobUrl('')
     setEvents([])
     setShowLog(true)
 
@@ -312,8 +314,19 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         </button>
                       </div>
                     </div>
+                  ) : playMode === 'blob' && blobUrl ? (
+                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
+                      <video
+                        src={blobUrl}
+                        controls
+                        playsInline
+                        preload="auto"
+                        className="w-full aspect-video object-contain"
+                        onError={() => setPlayMode('link')}
+                      />
+                    </div>
                   ) : (
-                    /* Signed URL should play directly in browser */
+                    /* Try signed URL directly */
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
                       <video
                         src={videoUrl}
@@ -321,7 +334,21 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         playsInline
                         preload="auto"
                         className="w-full aspect-video object-contain"
-                        onError={() => setPlayMode('link')}
+                        onError={async () => {
+                          // Direct play failed — try downloading as blob
+                          try {
+                            const res = await fetch(videoUrl)
+                            if (res.ok) {
+                              const blob = await res.blob()
+                              if (blob.size > 0) {
+                                setBlobUrl(URL.createObjectURL(blob))
+                                setPlayMode('blob')
+                                return
+                              }
+                            }
+                          } catch { /* fall through */ }
+                          setPlayMode('link')
+                        }}
                       />
                     </div>
                   )}
