@@ -2,9 +2,13 @@ import { useState, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sparkles, Loader2, AlertCircle, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import { FadeIn } from './animations/FadeIn'
-import { callCloudFunction } from '../lib/cloudbase'
 
-// Production uses CloudBase cloud functions; local dev uses SSE proxy
+// Coze API credentials — used directly from frontend (personal portfolio site)
+const COZE_API = 'https://api.coze.cn/v1/workflow/stream_run'
+const COZE_WORKFLOW_ID = '7664202655792054308'
+const COZE_TOKEN = 'pat_ervvPIQOKDLONWWa9LLUGqFHg57vY2dBnlyIbez5T3QwW8V9qkxuIJIUeplwfhPl'
+
+// Local dev uses /api/workflow proxy; production calls Coze directly
 const isProduction = typeof window !== 'undefined' && !window.location.hostname.includes('localhost')
 
 interface CozeWorkflowProps {
@@ -78,14 +82,135 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
       onGenerationStart()
 
       if (isProduction) {
-        // Production: use CloudBase SDK → cloud function → JSON response
-        addEvent('raw', '通过 CloudBase 云函数调用 Coze...')
-        const data = await callCloudFunction('workflow', { shuiyin, zhuti }) as Record<string, unknown>
-        addEvent('raw', '云函数返回: ' + JSON.stringify(data).slice(0, 300))
+        // Production: call Coze API directly, parse SSE stream
+        addEvent('raw', '直接调用 Coze API...')
+        const res = await fetch(COZE_API, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${COZE_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            workflow_id: COZE_WORKFLOW_ID,
+            parameters: { nicheng: shuiyin || '万物指南', ...(zhuti ? { zhuti } : {}) },
+          }),
+          signal: abortRef.current.signal,
+        })
 
-        if (data.error) throw new Error(String(data.error))
+        addEvent('raw', `响应状态: ${res.status} ${res.statusText}`)
 
-        const foundUrl = (data.videoUrl as string) || ''
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '')
+          throw new Error(`Coze HTTP ${res.status}: ${errText.slice(0, 300)}`)
+        }
+
+        // SSE parsing — same as local dev
+        const reader = res.body?.getReader()
+        if (!reader) throw new Error('无法读取响应流')
+
+        const decoder = new TextDecoder()
+        let fullContent = ''
+        let sseBuffer = ''
+        let foundUrl = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) { addEvent('raw', '-- 流结束 --'); break }
+
+          const chunk = decoder.decode(value, { stream: true })
+          sseBuffer += chunk
+
+          const parts = sseBuffer.split(/\n\n/)
+          sseBuffer = parts.pop() || ''
+
+          for (const part of parts) {
+            if (!part.trim()) continue
+            addEvent('raw', part.trim().slice(0, 300))
+
+            const dataLines: string[] = []
+            let eventType = ''
+            for (const line of part.split('\n')) {
+              const trimmed = line.trim()
+              if (trimmed.startsWith('data:')) dataLines.push(trimmed.slice(5).trim())
+              else if (trimmed.startsWith('event:')) eventType = trimmed.slice(6).trim()
+            }
+
+            if (dataLines.length === 0) continue
+
+            if (eventType === 'Error' || eventType === 'error') {
+              for (const dataStr of dataLines) {
+                try {
+                  const err = JSON.parse(dataStr)
+                  const msg = err.error_message || err.message || dataStr
+                  throw new Error(`Coze 错误: ${msg}`)
+                } catch (e) {
+                  if (e instanceof Error && e.message.startsWith('Coze 错误:')) throw e
+                }
+              }
+              continue
+            }
+
+            for (const dataStr of dataLines) {
+              if (dataStr === '[DONE]') { addEvent('parsed', '[DONE]'); continue }
+
+              try {
+                const parsed = JSON.parse(dataStr)
+                addEvent('parsed', JSON.stringify(parsed).slice(0, 300))
+
+                const content = parsed.content || parsed.output || parsed.text || parsed.answer || ''
+                if (typeof content === 'string') fullContent += content
+
+                const url = parsed.url || parsed.video_url || parsed.videoUrl || parsed.file_url || parsed.fileUrl || ''
+                if (url) { foundUrl = url; addEvent('url', `发现视频链接: ${url}`); break }
+
+                if (parsed.output) {
+                  if (typeof parsed.output === 'string') {
+                    const outUrl = extractVideoUrl(parsed.output)
+                    if (outUrl) { foundUrl = outUrl; addEvent('url', `从output文本发现: ${outUrl}`); break }
+                  } else if (typeof parsed.output === 'object') {
+                    const outUrl = parsed.output.url || parsed.output.video_url || parsed.output.file_url || ''
+                    if (outUrl) { foundUrl = outUrl; addEvent('url', `从output对象发现: ${outUrl}`); break }
+                  }
+                }
+
+                const attachments = parsed.attachments || parsed.files || []
+                if (Array.isArray(attachments)) {
+                  for (const att of attachments) {
+                    const attUrl = att.url || att.file_url || att.download_url || ''
+                    if (attUrl) { foundUrl = attUrl; addEvent('url', `从附件发现: ${attUrl}`); break }
+                  }
+                  if (foundUrl) break
+                }
+
+                if (parsed.data && typeof parsed.data === 'object') {
+                  const dataUrl = parsed.data.url || parsed.data.video_url || parsed.data.file_url || ''
+                  if (dataUrl) { foundUrl = dataUrl; addEvent('url', `从data对象发现: ${dataUrl}`); break }
+                }
+
+                if (parsed.message && typeof parsed.message === 'object') {
+                  if (parsed.message.content) fullContent += String(parsed.message.content)
+                }
+              } catch {
+                const urlFromStr = extractVideoUrl(dataStr)
+                if (urlFromStr) { foundUrl = urlFromStr; addEvent('url', `发现视频链接: ${urlFromStr}`); break }
+              }
+            }
+
+            if (foundUrl) break
+          }
+
+          if (!foundUrl) {
+            const urlFromContent = extractVideoUrl(fullContent)
+            if (urlFromContent) { foundUrl = urlFromContent; addEvent('url', `从内容中发现: ${urlFromContent}`) }
+          }
+
+          if (foundUrl) break
+        }
+
+        if (!foundUrl && fullContent) {
+          foundUrl = extractVideoUrl(fullContent) || ''
+        }
+
         if (foundUrl) {
           setVideoUrl(foundUrl)
           setPhase('done')
@@ -94,7 +219,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
           setShowLog(false)
         } else {
           setPhase('done')
-          addEvent('raw', `完整响应: ${JSON.stringify(data).slice(0, 1000)}`)
+          addEvent('raw', `完整响应: ${fullContent.slice(0, 1000)}`)
         }
       } else {
         // Local dev: SSE streaming via /api/workflow proxy
@@ -233,7 +358,11 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     } catch (err) {
       onGenerationStop()
       if (err instanceof DOMException && err.name === 'AbortError') { setPhase('idle'); return }
-      setErrorMsg(err instanceof Error ? err.message : '未知错误')
+      const msg = err instanceof Error ? err.message
+        : typeof err === 'string' ? err
+        : JSON.stringify(err)
+      addEvent('raw', `错误详情: ${msg}`)
+      setErrorMsg(msg || '未知错误')
       setPhase('error')
     }
   }, [zhuti, shuiyin, onGenerationStart, onGenerationStop, onGenerationDone])
