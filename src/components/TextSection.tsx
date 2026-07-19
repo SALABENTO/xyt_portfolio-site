@@ -12,21 +12,6 @@ function resolveImageUrl(id: string): string {
   return `/images/${id}`
 }
 
-// Float animation variants — subtle vertical oscillation, each image drifts differently
-function floatAnimation(index: number) {
-  return {
-    animate: {
-      y: [0, -12, 0],
-    },
-    transition: {
-      duration: 4 + index * 0.6,
-      repeat: Infinity,
-      ease: 'easeInOut',
-      delay: index * 0.8,
-    },
-  }
-}
-
 export function TextSection({ sections }: { sections: TextSectionType[] }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
 
