@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sparkles, Loader2, AlertCircle, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import { FadeIn } from './animations/FadeIn'
@@ -63,7 +63,14 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [proxyFailed, setProxyFailed] = useState(false)
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
+  const [swReady, setSwReady] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(() => setSwReady(true))
+    }
+  }, [])
 
   const runWorkflow = useCallback(async () => {
 
@@ -483,7 +490,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         播放视频
                       </a>
                     </div>
-                  ) : isProduction ? (
+                  ) : isProduction && swReady ? (
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
                       <video
                         src={`/sw-video?url=${encodeURIComponent(videoUrl)}`}
@@ -493,6 +500,21 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         className="w-full aspect-video object-contain"
                         onError={() => setProxyFailed(true)}
                       />
+                    </div>
+                  ) : isProduction ? (
+                    <div className="rounded-2xl bg-gradient-to-br from-stone-900 to-stone-800 p-8 text-center space-y-4">
+                      <Loader2 size={32} className="animate-spin text-white mx-auto opacity-80" />
+                      <p className="text-white text-lg font-medium">正在准备播放器...</p>
+                      <p className="text-stone-400 text-sm">Service Worker 激活后自动刷新播放</p>
+                      <a
+                        href={videoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3 text-sm font-semibold text-stone-900 hover:bg-stone-100 transition-all active:scale-[0.98]"
+                      >
+                        <Play size={18} />
+                        或直接播放
+                      </a>
                     </div>
                   ) : (
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
