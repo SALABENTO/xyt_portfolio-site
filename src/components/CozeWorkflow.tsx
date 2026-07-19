@@ -114,12 +114,14 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
         let fullContent = ''
         let sseBuffer = ''
         let foundUrl = ''
+        let streamError = ''
 
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) { addEvent('raw', '-- 流结束 --'); break }
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) { addEvent('raw', '-- 流结束 --'); break }
 
-          const chunk = decoder.decode(value, { stream: true })
+            const chunk = decoder.decode(value, { stream: true })
           sseBuffer += chunk
 
           const parts = sseBuffer.split(/\n\n/)
@@ -207,6 +209,10 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
           }
 
           if (foundUrl) break
+          }
+        } catch (e) {
+          streamError = e instanceof Error ? e.message : String(e)
+          addEvent('raw', `SSE 流读取中断: ${streamError}`)
         }
 
         if (!foundUrl && fullContent) {
@@ -218,7 +224,6 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
           setPhase('done')
           addEvent('url', `最终视频链接: ${foundUrl}`)
           onGenerationDone(foundUrl)
-          setShowLog(false)
           // Try to fetch as blob for in-page playback
           try {
             addEvent('raw', '尝试下载视频用于页面内播放...')
@@ -229,17 +234,17 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
               setBlobUrl(url)
               setProxyFailed(false)
               addEvent('raw', `视频下载成功 (${(blob.size / 1024 / 1024).toFixed(1)} MB)`)
+              setShowLog(false)
             } else {
-              setProxyFailed(true)
-              addEvent('raw', `视频下载失败: HTTP ${blobRes.status}`)
+              addEvent('raw', `视频下载失败: HTTP ${blobRes.status}，尝试 Service Worker 代理`)
             }
           } catch {
-            setProxyFailed(true)
-            addEvent('raw', '视频下载失败（CORS限制），使用新标签页播放')
+            addEvent('raw', '视频下载失败（CORS限制），尝试 Service Worker 代理')
           }
         } else {
           setPhase('done')
-          addEvent('raw', `完整响应: ${fullContent.slice(0, 1000)}`)
+          addEvent('raw', `未找到视频链接。完整响应: ${fullContent.slice(0, 1000)}`)
+          setShowLog(false)
         }
       } else {
         // Local dev: SSE streaming via /api/workflow proxy
