@@ -295,16 +295,16 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                   className="space-y-3"
                 >
                   {playMode === 'link' ? (
-                    <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-8 text-center space-y-4">
-                      <p className="text-sm text-amber-700">视频链接已获取，点击下方在新标签页打开或复制链接</p>
-                      <div className="flex items-center justify-center gap-3">
+                    <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-6 text-center space-y-3">
+                      <p className="text-sm text-amber-700">视频已生成，下方可直接播放或新窗口打开</p>
+                      <div className="flex items-center justify-center gap-3 flex-wrap">
                         <a
                           href={videoUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-amber-700 transition-all"
                         >
-                          在新标签页打开/下载
+                          在新标签页打开
                         </a>
                         <button
                           onClick={() => navigator.clipboard.writeText(videoUrl)}
@@ -325,7 +325,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                       />
                     </div>
                   ) : playMode === 'proxy' ? (
-                    /* Same-origin proxy — avoids CDN cross-origin blocking */
+                    /* Same-origin proxy */
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
                       <video
                         src={`/api/video-proxy?url=${encodeURIComponent(videoUrl)}`}
@@ -337,17 +337,22 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                       />
                     </div>
                   ) : (
-                    /* Try signed URL directly first */
-                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
-                      <video
+                    /* Use iframe for cross-origin video — same as opening in new tab,
+                       browser's native video player handles it without Origin restrictions */
+                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black relative">
+                      <iframe
                         src={videoUrl}
-                        controls
-                        playsInline
-                        preload="auto"
-                        referrerPolicy="no-referrer"
-                        className="w-full aspect-video object-contain"
-                        onError={() => setPlayMode('proxy')}
+                        className="w-full aspect-video"
+                        allowFullScreen
+                        title="Generated video"
                       />
+                      {/* Overlay button to switch to link mode if iframe is blocked */}
+                      <button
+                        onClick={() => setPlayMode('link')}
+                        className="absolute top-2 right-2 bg-white/80 hover:bg-white text-xs text-stone-600 px-2 py-1 rounded-lg transition-colors"
+                      >
+                        无法播放？
+                      </button>
                     </div>
                   )}
                 </motion.div>
