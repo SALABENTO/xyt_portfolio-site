@@ -59,6 +59,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
+  const [blobUrl, setBlobUrl] = useState('')
   const [proxyFailed, setProxyFailed] = useState(false)
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
@@ -69,6 +70,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     setPhase('running')
     setErrorMsg('')
     setVideoUrl('')
+    setBlobUrl('')
     setProxyFailed(false)
     setEvents([])
     setShowLog(true)
@@ -217,6 +219,24 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
           addEvent('url', `最终视频链接: ${foundUrl}`)
           onGenerationDone(foundUrl)
           setShowLog(false)
+          // Try to fetch as blob for in-page playback
+          try {
+            addEvent('raw', '尝试下载视频用于页面内播放...')
+            const blobRes = await fetch(foundUrl)
+            if (blobRes.ok) {
+              const blob = await blobRes.blob()
+              const url = URL.createObjectURL(blob)
+              setBlobUrl(url)
+              setProxyFailed(false)
+              addEvent('raw', `视频下载成功 (${(blob.size / 1024 / 1024).toFixed(1)} MB)`)
+            } else {
+              setProxyFailed(true)
+              addEvent('raw', `视频下载失败: HTTP ${blobRes.status}`)
+            }
+          } catch {
+            setProxyFailed(true)
+            addEvent('raw', '视频下载失败（CORS限制），使用新标签页播放')
+          }
         } else {
           setPhase('done')
           addEvent('raw', `完整响应: ${fullContent.slice(0, 1000)}`)
@@ -433,7 +453,17 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                   animate={{ opacity: 1, y: 0 }}
                   className="space-y-3"
                 >
-                  {isProduction || proxyFailed ? (
+                  {blobUrl ? (
+                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
+                      <video
+                        src={blobUrl}
+                        controls
+                        playsInline
+                        preload="auto"
+                        className="w-full aspect-video object-contain"
+                      />
+                    </div>
+                  ) : isProduction || proxyFailed ? (
                     <div className="rounded-2xl bg-gradient-to-br from-stone-900 to-stone-800 p-8 text-center space-y-4">
                       <Play size={32} className="text-white mx-auto opacity-80" />
                       <p className="text-white text-lg font-medium">视频已生成完毕</p>

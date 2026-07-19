@@ -13,7 +13,7 @@ import { ArrowDown, Layers, Lightbulb, Wand2 } from 'lucide-react'
 import type { VideoItem, TextSection as TextSectionType, ProductionStep } from '../types'
 
 const heroTitle = 'hi，面试官好'
-const heroSubtitle = '这是一次我的简单尝试 从调研到落地花费共计8小时'
+const heroSubtitle = '这是一次我的简单尝试 从调研到落地花费共计16小时'
 
 const videos: VideoItem[] = [
   {
