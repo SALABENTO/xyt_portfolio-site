@@ -3,9 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Sparkles, Loader2, AlertCircle, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import { FadeIn } from './animations/FadeIn'
 
-const COZE_TOKEN = 'pat_ervvPIQOKDLONWWa9LLUGqFHg57vY2dBnlyIbez5T3QwW8V9qkxuIJIUeplwfhPl'
-const COZE_API = 'https://api.coze.cn/v1/workflow/stream_run'
-const COZE_WORKFLOW_ID = '7664202655792054308'
+// Backend handles Coze API calls — token stays on server
 
 interface CozeWorkflowProps {
   onGenerationStart: () => void
@@ -55,8 +53,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
-  const [playMode, setPlayMode] = useState<'direct' | 'proxy' | 'blob' | 'link'>('direct')
-  const [blobUrl, setBlobUrl] = useState('')
+  const [proxyFailed, setProxyFailed] = useState(false)
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
@@ -66,8 +63,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     setPhase('running')
     setErrorMsg('')
     setVideoUrl('')
-    setPlayMode('direct')
-    setBlobUrl('')
+    setProxyFailed(false)
     setEvents([])
     setShowLog(true)
 
@@ -78,27 +74,18 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     try {
       abortRef.current = new AbortController()
 
-      const parameters: Record<string, string> = { nicheng: shuiyin || '万物指南' }
-      if (zhuti) parameters.zhuti = zhuti
-
-      const res = await fetch(COZE_API, {
+      const res = await fetch('/api/workflow', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${COZE_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          workflow_id: COZE_WORKFLOW_ID,
-          parameters,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shuiyin, zhuti }),
         signal: abortRef.current.signal,
       })
 
       addEvent('raw', `响应状态: ${res.status} ${res.statusText}`)
 
       if (!res.ok) {
-        const errBody = await res.text().catch(() => '')
-        throw new Error(`Coze API error ${res.status}: ${errBody.slice(0, 300)}`)
+        const errBody = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(errBody.error || `HTTP ${res.status}`)
       }
 
       onGenerationStart()
@@ -294,9 +281,9 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                   animate={{ opacity: 1, y: 0 }}
                   className="space-y-3"
                 >
-                  {playMode === 'link' ? (
+                  {proxyFailed ? (
                     <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-6 text-center space-y-3">
-                      <p className="text-sm text-amber-700">视频已生成，下方可直接播放或新窗口打开</p>
+                      <p className="text-sm text-amber-700">视频已生成，可通过下方链接查看</p>
                       <div className="flex items-center justify-center gap-3 flex-wrap">
                         <a
                           href={videoUrl}
@@ -314,18 +301,8 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         </button>
                       </div>
                     </div>
-                  ) : playMode === 'blob' && blobUrl ? (
-                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
-                      <video
-                        src={blobUrl}
-                        controls
-                        playsInline
-                        preload="auto"
-                        className="w-full aspect-video object-contain"
-                      />
-                    </div>
-                  ) : playMode === 'proxy' ? (
-                    /* Same-origin proxy */
+                  ) : (
+                    /* Backend proxy — same origin, no CORS issues */
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
                       <video
                         src={`/api/video-proxy?url=${encodeURIComponent(videoUrl)}`}
@@ -333,26 +310,8 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         playsInline
                         preload="auto"
                         className="w-full aspect-video object-contain"
-                        onError={() => setPlayMode('link')}
+                        onError={() => setProxyFailed(true)}
                       />
-                    </div>
-                  ) : (
-                    /* Use iframe for cross-origin video — same as opening in new tab,
-                       browser's native video player handles it without Origin restrictions */
-                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black relative">
-                      <iframe
-                        src={videoUrl}
-                        className="w-full aspect-video"
-                        allowFullScreen
-                        title="Generated video"
-                      />
-                      {/* Overlay button to switch to link mode if iframe is blocked */}
-                      <button
-                        onClick={() => setPlayMode('link')}
-                        className="absolute top-2 right-2 bg-white/80 hover:bg-white text-xs text-stone-600 px-2 py-1 rounded-lg transition-colors"
-                      >
-                        无法播放？
-                      </button>
                     </div>
                   )}
                 </motion.div>
