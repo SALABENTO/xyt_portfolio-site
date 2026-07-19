@@ -3,6 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Sparkles, Loader2, AlertCircle, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import { FadeIn } from './animations/FadeIn'
 
+const COZE_TOKEN = 'pat_ervvPIQOKDLONWWa9LLUGqFHg57vY2dBnlyIbez5T3QwW8V9qkxuIJIUeplwfhPl'
+const COZE_API = 'https://api.coze.cn/v1/workflow/stream_run'
+const COZE_WORKFLOW_ID = '7664202655792054308'
+
 interface CozeWorkflowProps {
   onGenerationStart: () => void
   onGenerationStop: () => void
@@ -51,7 +55,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
   const [phase, setPhase] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
-  const [playMode, setPlayMode] = useState<'direct' | 'proxy' | 'link'>('direct')
+  const [playMode, setPlayMode] = useState<'direct' | 'link'>('direct')
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [showLog, setShowLog] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
@@ -72,18 +76,27 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
     try {
       abortRef.current = new AbortController()
 
-      const res = await fetch('/api/workflow', {
+      const parameters: Record<string, string> = { nicheng: shuiyin || '万物指南' }
+      if (zhuti) parameters.zhuti = zhuti
+
+      const res = await fetch(COZE_API, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shuiyin, zhuti }),
+        headers: {
+          'Authorization': `Bearer ${COZE_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          workflow_id: COZE_WORKFLOW_ID,
+          parameters,
+        }),
         signal: abortRef.current.signal,
       })
 
       addEvent('raw', `响应状态: ${res.status} ${res.statusText}`)
 
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(errBody.error || `HTTP ${res.status}`)
+        const errBody = await res.text().catch(() => '')
+        throw new Error(`Coze API error ${res.status}: ${errBody.slice(0, 300)}`)
       }
 
       onGenerationStart()
@@ -281,7 +294,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                 >
                   {playMode === 'link' ? (
                     <div className="rounded-xl border-2 border-dashed border-amber-300 bg-amber-50 p-8 text-center space-y-4">
-                      <p className="text-sm text-amber-700">视频链接已获取，但浏览器无法直接播放</p>
+                      <p className="text-sm text-amber-700">视频链接已获取，点击下方在新标签页打开或复制链接</p>
                       <div className="flex items-center justify-center gap-3">
                         <a
                           href={videoUrl}
@@ -299,19 +312,8 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         </button>
                       </div>
                     </div>
-                  ) : playMode === 'proxy' ? (
-                    <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
-                      <video
-                        src={`/api/video-proxy?url=${encodeURIComponent(videoUrl)}`}
-                        controls
-                        playsInline
-                        preload="auto"
-                        className="w-full aspect-video object-contain"
-                        onError={() => setPlayMode('link')}
-                      />
-                    </div>
                   ) : (
-                    /* playMode === 'direct' — signed URL, try direct first */
+                    /* Signed URL should play directly in browser */
                     <div className="rounded-xl overflow-hidden border border-stone-200 bg-black">
                       <video
                         src={videoUrl}
@@ -319,7 +321,7 @@ export function CozeWorkflow({ onGenerationStart, onGenerationStop, onGeneration
                         playsInline
                         preload="auto"
                         className="w-full aspect-video object-contain"
-                        onError={() => setPlayMode('proxy')}
+                        onError={() => setPlayMode('link')}
                       />
                     </div>
                   )}
